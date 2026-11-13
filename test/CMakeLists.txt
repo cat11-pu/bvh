@@ -28,6 +28,11 @@ add_test(
         --dir 0 0 -1
         --up 0 1 0)
 
+add_executable(motion_blur_test motion_blur_test.cpp)
+target_link_libraries(motion_blur_test PUBLIC bvh)
+set_target_properties(motion_blur_test PROPERTIES CXX_STANDARD 20)
+add_test(NAME motion_blur_test COMMAND motion_blur_test)
+
 if (BVH_BUILD_C_API)
     add_executable(c_api_example c_api_example.c load_obj.cpp)
     target_link_libraries(c_api_example PUBLIC bvh_c)

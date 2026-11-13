@@ -1,0 +1,9 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/cat/gsb/uid3676/build-dbg/cmake_install.cmake",
+		"/home/cat/gsb/uid3676/build-dbg/src/bvh/v2/cmake_install.cmake",
+		"/home/cat/gsb/uid3676/build-dbg/test/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

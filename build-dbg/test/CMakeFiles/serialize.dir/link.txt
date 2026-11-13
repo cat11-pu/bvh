@@ -1,0 +1,1 @@
+/usr/bin/c++ -g -Wl,--dependency-file=CMakeFiles/serialize.dir/link.d CMakeFiles/serialize.dir/serialize.cpp.o -o ../bin/serialize
