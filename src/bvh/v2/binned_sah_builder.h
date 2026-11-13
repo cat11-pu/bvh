@@ -85,14 +85,25 @@ protected:
         size_t begin,
         size_t end)
     {
-        auto bin_scale = Vec(BinCount) / bbox.get_diagonal();
+        // A zero diagonal (e.g. produced by degenerate primitives) would otherwise yield an
+        // infinite scale, which propagates NaNs/Infs into the bin indices and results in
+        // undefined behavior when cast to `size_t`. The scale on such axes is set to zero
+        // instead, which deterministically maps every primitive to the first bin.
+        auto bin_scale = Vec::generate([&] (size_t axis) {
+            auto diagonal = bbox.get_diagonal()[axis];
+            return diagonal == static_cast<Scalar>(0.)
+                ? static_cast<Scalar>(0.)
+                : static_cast<Scalar>(BinCount) / diagonal;
+        });
         auto bin_offset = -bbox.min * bin_scale;
 
         for (size_t i = begin; i < end; ++i) {
             auto pos = fast_mul_add(centers_[prim_ids_[i]], bin_scale, bin_offset);
             static_for<0, Node::dimension>([&] (size_t axis) {
-                size_t index = std::min(BinCount - 1,
-                    static_cast<size_t>(robust_max(pos[axis], static_cast<Scalar>(0.))));
+                auto clamped = robust_max(pos[axis], static_cast<Scalar>(0.));
+                size_t index = std::isfinite(clamped)
+                    ? std::min(BinCount - 1, static_cast<size_t>(clamped))
+                    : BinCount - 1;
                 per_axis_bins[axis][index].add(bboxes_[prim_ids_[i]]);
             });
         }

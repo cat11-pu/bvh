@@ -169,7 +169,15 @@ private:
         assert(config_.log2_grid_dim <= std::numeric_limits<MortonCode>::digits / Node::dimension);
         auto bin_count = size_t{1} << (config_.log2_grid_dim * Node::dimension);
         auto grid_dim = size_t{1} << config_.log2_grid_dim;
-        auto grid_scale = Vec(static_cast<Scalar>(grid_dim)) * safe_inverse(center_bbox.get_diagonal());
+        // Degenerate primitives may collapse one (or more) axis of the center bounding box.
+        // Guard the inverse so the grid scale on such an axis stays zero instead of becoming
+        // infinite, which would otherwise produce out-of-range grid coordinates.
+        auto grid_scale = Vec::generate([&] (size_t axis) {
+            auto diagonal = center_bbox.get_diagonal()[axis];
+            return diagonal == static_cast<Scalar>(0.)
+                ? static_cast<Scalar>(0.)
+                : static_cast<Scalar>(grid_dim) / diagonal;
+        });
         auto grid_offset = -center_bbox.min * grid_scale;
 
         // Place primitives in bins
@@ -178,9 +186,14 @@ private:
                 local_bins.bins.resize(bin_count);
                 for (size_t i = begin; i < end; ++i) {
                     auto p = robust_max(fast_mul_add(centers_[i], grid_scale, grid_offset), Vec(0));
-                    auto x = std::min(grid_dim - 1, static_cast<size_t>(p[0]));
-                    auto y = std::min(grid_dim - 1, static_cast<size_t>(p[1]));
-                    auto z = std::min(grid_dim - 1, static_cast<size_t>(p[2]));
+                    auto to_grid_coord = [&] (Scalar value) {
+                        return std::isfinite(value)
+                            ? std::min(grid_dim - 1, static_cast<size_t>(value))
+                            : grid_dim - 1;
+                    };
+                    auto x = to_grid_coord(p[0]);
+                    auto y = to_grid_coord(p[1]);
+                    auto z = to_grid_coord(p[2]);
                     local_bins[morton_encode(x, y, z) & (bin_count - 1)].add(i);
                 }
             },

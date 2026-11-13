@@ -76,6 +76,11 @@ protected:
         const auto prim_count = bboxes_.size();
 
         Bvh<Node> bvh;
+        // An empty set of primitives produces an empty BVH. It must be handled explicitly
+        // because a leaf is required to contain at least one primitive (see Node::Index).
+        if (prim_count == 0)
+            return bvh;
+
         bvh.nodes.reserve((2 * prim_count) / config_.min_leaf_size);
         bvh.nodes.emplace_back();
         bvh.nodes.back().set_bbox(compute_bbox(0, prim_count));

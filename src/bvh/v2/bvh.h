@@ -125,6 +125,11 @@ template <typename Node>
 template <bool IsAnyHit, typename Stack, typename LeafFn, typename InnerFn>
 void Bvh<Node>::traverse_top_down(Index start, Stack& stack, LeafFn&& leaf_fn, InnerFn&& inner_fn) const
 {
+    // An empty BVH (e.g. a scene containing only degenerate primitives) has no nodes to
+    // traverse, so the query simply returns no hit.
+    if (nodes.empty())
+        return;
+
     stack.push(start);
 restart:
     while (!stack.is_empty()) {
@@ -159,6 +164,9 @@ restart:
 template <typename Node>
 template <bool IsAnyHit, bool IsRobust, typename Stack, typename LeafFn, typename InnerFn>
 void Bvh<Node>::intersect(const Ray& ray, Index start, Stack& stack, LeafFn&& leaf_fn, InnerFn&& inner_fn) const {
+    if (nodes.empty())
+        return;
+
     auto inv_dir = ray.template get_inv_dir<!IsRobust>();
     auto inv_org = -inv_dir * ray.org;
     auto inv_dir_pad = ray.pad_inv_dir(inv_dir);

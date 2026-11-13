@@ -1,0 +1,10 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/cat/gsb/uid3675/build-capi/cmake_install.cmake",
+		"/home/cat/gsb/uid3675/build-capi/src/bvh/v2/cmake_install.cmake",
+		"/home/cat/gsb/uid3675/build-capi/src/bvh/v2/c_api/cmake_install.cmake",
+		"/home/cat/gsb/uid3675/build-capi/test/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

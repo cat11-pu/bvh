@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/degenerate_test.dir/link.d CMakeFiles/degenerate_test.dir/degenerate_test.cpp.o -o ../bin/degenerate_test

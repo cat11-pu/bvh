@@ -1,0 +1,154 @@
+Start testing: Nov 14 06:58 CST
+----------------------------------------------------------
+1/5 Testing: simple_example
+1/5 Test: simple_example
+Command: "/home/cat/gsb/uid3675/build-release/bin/simple_example"
+Directory: /home/cat/gsb/uid3675/build-release/test
+"simple_example" start time: Nov 14 06:58 CST
+Output:
+----------------------------------------------------------
+Intersection found
+  primitive: 1
+  distance: 1
+  barycentric coords.: -0, 0.5
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"simple_example" end time: Nov 14 06:58 CST
+"simple_example" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/5 Testing: degenerate_test
+2/5 Test: degenerate_test
+Command: "/home/cat/gsb/uid3675/build-release/bin/degenerate_test"
+Directory: /home/cat/gsb/uid3675/build-release/test
+"degenerate_test" start time: Nov 14 06:58 CST
+Output:
+----------------------------------------------------------
+[ok] empty quality=0 parallel=0 input=0 skipped=0 built=0 nodes=0
+[ok] empty quality=0 parallel=1 input=0 skipped=0 built=0 nodes=0
+[ok] empty quality=1 parallel=0 input=0 skipped=0 built=0 nodes=0
+[ok] empty quality=1 parallel=1 input=0 skipped=0 built=0 nodes=0
+[ok] empty quality=2 parallel=0 input=0 skipped=0 built=0 nodes=0
+[ok] empty quality=2 parallel=1 input=0 skipped=0 built=0 nodes=0
+[ok] empty BVH traversal
+[ok] all-degenerate quality=0 parallel=0 input=10000 skipped=10000 built=0 nodes=0
+[ok] all-degenerate quality=0 parallel=1 input=10000 skipped=10000 built=0 nodes=0
+[ok] all-degenerate quality=1 parallel=0 input=10000 skipped=10000 built=0 nodes=0
+[ok] all-degenerate quality=1 parallel=1 input=10000 skipped=10000 built=0 nodes=0
+[ok] all-degenerate quality=2 parallel=0 input=10000 skipped=10000 built=0 nodes=0
+[ok] all-degenerate quality=2 parallel=1 input=10000 skipped=10000 built=0 nodes=0
+[ok] mostly-degenerate quality=0 parallel=0 input=10000 skipped=9950 built=50 nodes=47
+[ok] mostly-degenerate quality=0 parallel=1 input=10000 skipped=9950 built=50 nodes=99
+[ok] mostly-degenerate quality=1 parallel=0 input=10000 skipped=9950 built=50 nodes=45
+[ok] mostly-degenerate quality=1 parallel=1 input=10000 skipped=9950 built=50 nodes=99
+[ok] mostly-degenerate quality=2 parallel=0 input=10000 skipped=9950 built=50 nodes=45
+[ok] mostly-degenerate quality=2 parallel=1 input=10000 skipped=9950 built=50 nodes=99
+[ok] few-degenerate quality=0 parallel=0 input=5064 skipped=64 built=5000 nodes=2985
+[ok] few-degenerate quality=0 parallel=1 input=5064 skipped=64 built=5000 nodes=4167
+[ok] few-degenerate quality=1 parallel=0 input=5064 skipped=64 built=5000 nodes=3643
+[ok] few-degenerate quality=1 parallel=1 input=5064 skipped=64 built=5000 nodes=4167
+[ok] few-degenerate quality=2 parallel=0 input=5064 skipped=64 built=5000 nodes=3643
+[ok] few-degenerate quality=2 parallel=1 input=5064 skipped=64 built=5000 nodes=4167
+[ok] valid-only quality=0 parallel=0 input=2000 skipped=0 built=2000 nodes=1301
+[ok] valid-only quality=0 parallel=1 input=2000 skipped=0 built=2000 nodes=2325
+[ok] valid-only quality=1 parallel=0 input=2000 skipped=0 built=2000 nodes=1539
+[ok] valid-only quality=1 parallel=1 input=2000 skipped=0 built=2000 nodes=2325
+[ok] valid-only quality=2 parallel=0 input=2000 skipped=0 built=2000 nodes=1539
+[ok] valid-only quality=2 parallel=1 input=2000 skipped=0 built=2000 nodes=2325
+[ok] single-degenerate quality=0 parallel=0 input=1 skipped=1 built=0 nodes=0
+[ok] single-valid quality=0 parallel=0 input=1 skipped=0 built=1 nodes=1
+[ok] single-degenerate quality=0 parallel=1 input=1 skipped=1 built=0 nodes=0
+[ok] single-valid quality=0 parallel=1 input=1 skipped=0 built=1 nodes=1
+[ok] single-degenerate quality=1 parallel=0 input=1 skipped=1 built=0 nodes=0
+[ok] single-valid quality=1 parallel=0 input=1 skipped=0 built=1 nodes=1
+[ok] single-degenerate quality=1 parallel=1 input=1 skipped=1 built=0 nodes=0
+[ok] single-valid quality=1 parallel=1 input=1 skipped=0 built=1 nodes=1
+[ok] single-degenerate quality=2 parallel=0 input=1 skipped=1 built=0 nodes=0
+[ok] single-valid quality=2 parallel=0 input=1 skipped=0 built=1 nodes=1
+[ok] single-degenerate quality=2 parallel=1 input=1 skipped=1 built=0 nodes=0
+[ok] single-valid quality=2 parallel=1 input=1 skipped=0 built=1 nodes=1
+
+=== Summary ===
+builds:            42
+input triangles:   162396
+skipped (degen.):  120090
+built primitives:  42306
+rays cross-checked:48000
+mismatches:        0
+All degenerate-triangle tests passed.
+<end of output>
+Test time =   4.98 sec
+----------------------------------------------------------
+Test Passed.
+"degenerate_test" end time: Nov 14 06:58 CST
+"degenerate_test" time elapsed: 00:00:04
+----------------------------------------------------------
+
+3/5 Testing: threadpool_test
+3/5 Test: threadpool_test
+Command: "/home/cat/gsb/uid3675/build-release/bin/threadpool_test"
+Directory: /home/cat/gsb/uid3675/build-release/test
+"threadpool_test" start time: Nov 14 06:58 CST
+Output:
+----------------------------------------------------------
+Total estimated time: 0s
+Waiting for 21 threads
+Remaining time: 562ms
+Remaining time: 506ms
+Remaining time: 450ms
+Remaining time: 394ms
+Remaining time: 338ms
+Remaining time: 282ms
+Remaining time: 226ms
+Remaining time: 170ms
+Remaining time: 114ms
+Remaining time: 58ms
+Remaining time: 2ms
+Finished
+Done waiting
+<end of output>
+Test time =   0.66 sec
+----------------------------------------------------------
+Test Passed.
+"threadpool_test" end time: Nov 14 06:58 CST
+"threadpool_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/5 Testing: serialize
+4/5 Test: serialize
+Command: "/home/cat/gsb/uid3675/build-release/bin/serialize"
+Directory: /home/cat/gsb/uid3675/build-release/test
+"serialize" start time: Nov 14 06:58 CST
+Output:
+----------------------------------------------------------
+The deserialized BVH is the same as the original one
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"serialize" end time: Nov 14 06:58 CST
+"serialize" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/5 Testing: benchmark
+5/5 Test: benchmark
+Command: "/home/cat/gsb/uid3675/build-release/bin/benchmark" "/home/cat/gsb/uid3675/test/scenes/cornell_box.obj" "--eye" "0" "1" "2" "--dir" "0" "0" "-1" "--up" "0" "1" "0"
+Directory: /home/cat/gsb/uid3675/build-release/test
+"benchmark" start time: Nov 14 06:58 CST
+Output:
+----------------------------------------------------------
+Loaded file with 36 triangle(s)
+Built BVH with 37 node(s) in 2ms
+1027152 intersection(s) found in 114ms
+Image saved as 'render.ppm'
+<end of output>
+Test time =   0.15 sec
+----------------------------------------------------------
+Test Passed.
+"benchmark" end time: Nov 14 06:58 CST
+"benchmark" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Nov 14 06:58 CST

@@ -81,3 +81,21 @@ The library contains several examples that are kept up-to-date with the API:
 - A [benchmarking utility](test/benchmark.cpp) that showcases what the library can do.
 - A [serialization test](test/serialize.cpp) that shows how to save and load a BVH from a file.
 - A [C API example](test/c_api_example.c) that shows how to use the C bindings to this library.
+
+## Degenerate Primitives
+
+Degenerate triangles (zero-area primitives such as point or line triangles with repeated or
+collinear vertices) produce bounding boxes with a zero diagonal, which corrupts the grid/bin
+partitioning used by the builders and can lead to undefined behavior or aborts. The helpers in
+`bvh/v2/validate.h` filter these primitives out before construction and count how many were
+skipped:
+
+    size_t degenerate_count = 0;
+    auto bvh = bvh::v2::build_validated<Node>(
+        thread_pool, triangles, config, &degenerate_count);
+
+The returned BVH only references the non-degenerate triangles, while `degenerate_count` reports the
+number of skipped ones. An empty scene (or one made exclusively of degenerate triangles) builds an
+empty BVH that is safe to traverse; ray queries on it simply return no hit. The
+[degenerate test](test/degenerate_test.cpp) cross-checks BVH traversal against a brute-force
+traversal for empty, fully-degenerate, and mixed scenes.

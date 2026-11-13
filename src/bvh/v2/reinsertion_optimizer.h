@@ -64,6 +64,11 @@ private:
 
     template <typename Derived>
     static void optimize(Executor<Derived>& executor, Bvh<Node>& bvh, const Config& config) {
+        // An empty BVH (e.g. a scene made only of degenerate primitives) has no nodes or
+        // primitives to reinsert, so there is nothing to optimize.
+        if (bvh.nodes.empty())
+            return;
+
         auto parents = compute_parents(executor, bvh);
         ReinsertionOptimizer<Node>(bvh, std::move(parents)).optimize(executor, config);
     }

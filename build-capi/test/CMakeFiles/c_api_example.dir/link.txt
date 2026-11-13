@@ -1,0 +1,1 @@
+/usr/bin/c++ -Wl,--dependency-file=CMakeFiles/c_api_example.dir/link.d CMakeFiles/c_api_example.dir/c_api_example.c.o CMakeFiles/c_api_example.dir/load_obj.cpp.o -o ../bin/c_api_example  -Wl,-rpath,/home/cat/gsb/uid3675/build-capi/lib ../lib/libbvh_c.so
