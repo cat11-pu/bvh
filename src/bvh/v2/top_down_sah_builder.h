@@ -73,7 +73,7 @@ protected:
     }
 
     Bvh<Node> build() {
-        const auto prim_count = bboxes_.size();
+        const auto prim_count = get_prim_ids().size();
 
         Bvh<Node> bvh;
         bvh.nodes.reserve((2 * prim_count) / config_.min_leaf_size);

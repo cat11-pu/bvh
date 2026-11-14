@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <optional>
 #include <numeric>
+#include <limits>
 #include <cassert>
 
 namespace bvh::v2 {
@@ -40,6 +41,10 @@ public:
 
         /// Log of the dimension of the grid used to split the workload horizontally.
         size_t log2_grid_dim = 4;
+
+        /// Number of mini-trees above which the top-level BVH is built in parallel,
+        /// by grouping spatially-close mini-trees and building a sub-BVH per group.
+        size_t top_build_threshold = 4096;
     };
 
     /// Starts building a BVH with the given primitive data. The build algorithm is multi-threaded,
@@ -52,63 +57,19 @@ public:
     {
         MiniTreeBuilder builder(thread_pool, bboxes, centers, config);
         auto mini_trees = builder.build_mini_trees();
-        if (config.enable_pruning)
-            mini_trees = builder.prune_mini_trees(std::move(mini_trees));
-        return builder.build_top_bvh(mini_trees);
+        auto roots = config.enable_pruning
+            ? builder.find_pruned_roots(mini_trees)
+            : MiniTreeBuilder::make_default_roots(mini_trees);
+        return builder.build_top_bvh(mini_trees, roots);
     }
 
 private:
     friend struct BuildTask;
 
-    struct Bin {
-        std::vector<size_t> ids;
-
-        BVH_ALWAYS_INLINE void add(size_t id) { ids.push_back(id); }
-
-        BVH_ALWAYS_INLINE void merge(Bin&& other) {
-            if (ids.empty())
-                ids = std::move(other.ids);
-            else {
-                ids.insert(ids.end(), other.ids.begin(), other.ids.end());
-                other.ids.clear();
-            }
-        }
-    };
-
-    struct LocalBins {
-        std::vector<Bin> bins;
-
-        BVH_ALWAYS_INLINE Bin& operator [] (size_t i) { return bins[i]; }
-        BVH_ALWAYS_INLINE const Bin& operator [] (size_t i) const { return bins[i]; }
-
-        BVH_ALWAYS_INLINE void merge_small_bins(size_t threshold) {
-            for (size_t i = 0; i < bins.size();) {
-                size_t j = i + 1;
-                for (; j < bins.size() && bins[j].ids.size() + bins[i].ids.size() <= threshold; ++j)
-                    bins[i].merge(std::move(bins[j]));
-                i = j;
-            }
-        }
-
-        BVH_ALWAYS_INLINE void remove_empty_bins() {
-            bins.resize(std::remove_if(bins.begin(), bins.end(),
-                [] (const Bin& bin) { return bin.ids.empty(); }) - bins.begin());
-        }
-
-        BVH_ALWAYS_INLINE void merge(LocalBins&& other) {
-            bins.resize(std::max(bins.size(), other.bins.size()));
-            for (size_t i = 0, n = std::min(bins.size(), other.bins.size()); i < n; ++i)
-                bins[i].merge(std::move(other[i]));
-        }
-    };
-
     struct BuildTask {
         MiniTreeBuilder* builder;
         Bvh<Node>& bvh;
         std::vector<size_t> prim_ids;
-
-        std::vector<BBox> bboxes;
-        std::vector<Vec> centers;
 
         BuildTask(
             MiniTreeBuilder* builder,
@@ -120,22 +81,12 @@ private:
         {}
 
         BVH_ALWAYS_INLINE void run() {
-            // Make sure that rebuilds produce the same BVH
-            std::sort(prim_ids.begin(), prim_ids.end());
-
-            // Extract bounding boxes and centers for this set of primitives
-            bboxes.resize(prim_ids.size());
-            centers.resize(prim_ids.size());
-            for (size_t i = 0; i < prim_ids.size(); ++i) {
-                bboxes[i] = builder->bboxes_[prim_ids[i]];
-                centers[i] = builder->centers_[prim_ids[i]];
-            }
-
-            bvh = BinnedSahBuilder<Node>::build(bboxes, centers, builder->config_);
-
-            // Permute primitive indices so that they index the proper set of primitives
-            for (size_t i = 0; i < bvh.prim_ids.size(); ++i)
-                bvh.prim_ids[i] = prim_ids[bvh.prim_ids[i]];
+            // Build directly over the global primitive arrays, avoiding any copy
+            // of the bounding boxes and centers for this set of primitives.
+            // Note: The counting sort used to bin primitives already guarantees
+            // that rebuilds produce the same BVH.
+            bvh = BinnedSahBuilder<Node>::build(
+                builder->bboxes_, builder->centers_, std::move(prim_ids), builder->config_);
         }
     };
 
@@ -149,7 +100,7 @@ private:
         std::span<const BBox> bboxes,
         std::span<const Vec> centers,
         const Config& config)
-        : executor_(thread_pool)
+        : executor_(thread_pool, 1)
         , bboxes_(bboxes)
         , centers_(centers)
         , config_(config)
@@ -172,32 +123,83 @@ private:
         auto grid_scale = Vec(static_cast<Scalar>(grid_dim)) * safe_inverse(center_bbox.get_diagonal());
         auto grid_offset = -center_bbox.min * grid_scale;
 
-        // Place primitives in bins
-        auto final_bins = executor_.reduce(0, bboxes_.size(), LocalBins {},
-            [&] (LocalBins& local_bins, size_t begin, size_t end) {
-                local_bins.bins.resize(bin_count);
-                for (size_t i = begin; i < end; ++i) {
-                    auto p = robust_max(fast_mul_add(centers_[i], grid_scale, grid_offset), Vec(0));
-                    auto x = std::min(grid_dim - 1, static_cast<size_t>(p[0]));
-                    auto y = std::min(grid_dim - 1, static_cast<size_t>(p[1]));
-                    auto z = std::min(grid_dim - 1, static_cast<size_t>(p[2]));
-                    local_bins[morton_encode(x, y, z) & (bin_count - 1)].add(i);
-                }
-            },
-            [&] (LocalBins& result, LocalBins&& other) { result.merge(std::move(other)); });
+        auto bin_of = [&] (size_t i) {
+            auto p = robust_max(fast_mul_add(centers_[i], grid_scale, grid_offset), Vec(0));
+            auto x = std::min(grid_dim - 1, static_cast<size_t>(p[0]));
+            auto y = std::min(grid_dim - 1, static_cast<size_t>(p[1]));
+            auto z = std::min(grid_dim - 1, static_cast<size_t>(p[2]));
+            return morton_encode(x, y, z) & (bin_count - 1);
+        };
 
+        // Place primitives in bins using a two-pass counting sort. Compared to keeping one
+        // vector per bin, this performs a single allocation for all the primitive indices.
+        const size_t prim_count = bboxes_.size();
+        const size_t thread_count = std::max<size_t>(size_t{1}, executor_.thread_pool.get_thread_count());
+        const size_t chunk_count = std::min(thread_count, prim_count);
+        const size_t chunk_size = (prim_count + chunk_count - 1) / chunk_count;
+
+        std::vector<std::vector<size_t>> counts(chunk_count, std::vector<size_t>(bin_count, 0));
+        executor_.for_each(0, chunk_count, [&] (size_t begin, size_t end) {
+            for (size_t c = begin; c < end; ++c) {
+                auto first = c * chunk_size, last = std::min(first + chunk_size, prim_count);
+                for (size_t i = first; i < last; ++i)
+                    counts[c][bin_of(i)]++;
+            }
+        });
+
+        // Lay bins out consecutively, with each chunk's indices contiguous within a bin
+        std::vector<size_t> bin_offsets(bin_count + 1, 0);
+        for (size_t b = 0; b < bin_count; ++b)
+            for (size_t c = 0; c < chunk_count; ++c)
+                bin_offsets[b + 1] += counts[c][b];
+        for (size_t b = 0; b < bin_count; ++b)
+            bin_offsets[b + 1] += bin_offsets[b];
+
+        std::vector<size_t> sorted_ids(prim_count);
+        {
+            std::vector<std::vector<size_t>> cursors(chunk_count, std::vector<size_t>(bin_count));
+            for (size_t b = 0; b < bin_count; ++b) {
+                size_t offset = bin_offsets[b];
+                for (size_t c = 0; c < chunk_count; ++c) {
+                    cursors[c][b] = offset;
+                    offset += counts[c][b];
+                }
+            }
+            executor_.for_each(0, chunk_count, [&] (size_t begin, size_t end) {
+                for (size_t c = begin; c < end; ++c) {
+                    auto first = c * chunk_size, last = std::min(first + chunk_size, prim_count);
+                    auto& cursor = cursors[c];
+                    for (size_t i = first; i < last; ++i)
+                        sorted_ids[cursor[bin_of(i)]++] = i;
+                }
+            });
+        }
+
+        // Merge small bins and skip empty ones. Since bins are contiguous ranges in
+        // `sorted_ids`, merged bins are simply larger contiguous ranges.
         // Note: Merging small bins will deteriorate the quality of the top BVH if there is no
         // pruning, since it will then produce larger mini-trees. For this reason, it is only enabled
         // when mini-tree pruning is enabled.
-        if (config_.enable_pruning)
-            final_bins.merge_small_bins(config_.parallel_threshold);
-        final_bins.remove_empty_bins();
+        std::vector<std::pair<size_t, size_t>> task_ranges;
+        for (size_t i = 0; i < bin_count;) {
+            size_t j = i + 1;
+            if (config_.enable_pruning) {
+                size_t size = bin_offsets[j] - bin_offsets[i];
+                for (; j < bin_count && size + (bin_offsets[j + 1] - bin_offsets[j]) <= config_.parallel_threshold; ++j)
+                    size += bin_offsets[j + 1] - bin_offsets[j];
+            }
+            if (bin_offsets[j] > bin_offsets[i])
+                task_ranges.emplace_back(bin_offsets[i], bin_offsets[j]);
+            i = j;
+        }
 
         // Iterate over bins to collect groups of primitives and build BVHs over them in parallel
-        std::vector<Bvh<Node>> mini_trees(final_bins.bins.size());
+        std::vector<Bvh<Node>> mini_trees(task_ranges.size());
         ThreadPool::TaskGroup group;
-        for (size_t i = 0; i < final_bins.bins.size(); ++i) {
-            auto task = new BuildTask(this, mini_trees[i], std::move(final_bins[i].ids));
+        for (size_t i = 0; i < task_ranges.size(); ++i) {
+            auto [begin, end] = task_ranges[i];
+            std::vector<size_t> prim_ids(sorted_ids.begin() + begin, sorted_ids.begin() + end);
+            auto task = new BuildTask(this, mini_trees[i], std::move(prim_ids));
             executor_.thread_pool.push(group, [task] (size_t) { task->run(); delete task; });
         }
         executor_.thread_pool.wait(group);
@@ -205,7 +207,18 @@ private:
         return mini_trees;
     }
 
-    std::vector<Bvh<Node>> prune_mini_trees(std::vector<Bvh<Node>>&& mini_trees) {
+    static std::vector<std::pair<size_t, size_t>> make_default_roots(
+        const std::vector<Bvh<Node>>& mini_trees)
+    {
+        std::vector<std::pair<size_t, size_t>> roots(mini_trees.size());
+        for (size_t i = 0; i < mini_trees.size(); ++i)
+            roots[i] = std::make_pair(i, size_t{0});
+        return roots;
+    }
+
+    /// Finds the roots of the sub-trees to use as leaves of the top-level BVH, by culling
+    /// mini-tree nodes whose area is above a fraction of the average mini-tree root area.
+    std::vector<std::pair<size_t, size_t>> find_pruned_roots(const std::vector<Bvh<Node>>& mini_trees) {
         // Compute the area threshold based on the area of the entire set of primitives
         auto avg_area = static_cast<Scalar>(0.);
         for (auto& mini_tree : mini_trees)
@@ -213,102 +226,167 @@ private:
         avg_area /= static_cast<Scalar>(mini_trees.size());
         auto threshold = avg_area * config_.pruning_area_ratio;
 
-        // Cull nodes whose area is above the threshold
-        std::stack<size_t> stack;
-        std::vector<std::pair<size_t, size_t>> pruned_roots;
-        for (size_t i = 0; i < mini_trees.size(); ++i) {
-            stack.push(0);
-            auto& mini_tree = mini_trees[i];
-            while (!stack.empty()) {
-                auto node_id = stack.top();
-                auto& node = mini_tree.nodes[node_id];
-                stack.pop();
-                if (node.get_bbox().get_half_area() < threshold || node.is_leaf()) {
-                    pruned_roots.emplace_back(i, node_id);
-                } else {
-                    stack.push(node.index.first_id());
-                    stack.push(node.index.first_id() + 1);
+        // Cull nodes whose area is above the threshold, in parallel. The per-chunk
+        // results are concatenated in chunk order to keep the build deterministic.
+        const size_t thread_count = std::max<size_t>(size_t{1}, executor_.thread_pool.get_thread_count());
+        const size_t chunk_count = std::min(thread_count, mini_trees.size());
+        const size_t chunk_size = (mini_trees.size() + chunk_count - 1) / chunk_count;
+        std::vector<std::vector<std::pair<size_t, size_t>>> per_chunk_roots(chunk_count);
+        executor_.for_each(0, chunk_count, [&] (size_t begin, size_t end) {
+            for (size_t c = begin; c < end; ++c) {
+                auto& out = per_chunk_roots[c];
+                std::vector<size_t> stack;
+                auto last = std::min((c + 1) * chunk_size, mini_trees.size());
+                for (size_t i = c * chunk_size; i < last; ++i) {
+                    stack.push_back(0);
+                    auto& mini_tree = mini_trees[i];
+                    while (!stack.empty()) {
+                        auto node_id = stack.back();
+                        auto& node = mini_tree.nodes[node_id];
+                        stack.pop_back();
+                        if (node.get_bbox().get_half_area() < threshold || node.is_leaf()) {
+                            out.emplace_back(i, node_id);
+                        } else {
+                            stack.push_back(node.index.first_id());
+                            stack.push_back(node.index.first_id() + 1);
+                        }
+                    }
                 }
             }
-        }
-
-        // Extract the BVHs rooted at the previously computed indices
-        std::vector<Bvh<Node>> pruned_trees(pruned_roots.size());
-        executor_.for_each(0, pruned_roots.size(),
-            [&] (size_t begin, size_t end) {
-                for (size_t i = begin; i < end; ++i) {
-                    if (pruned_roots[i].second == 0)
-                        pruned_trees[i] = std::move(mini_trees[pruned_roots[i].first]);
-                    else
-                        pruned_trees[i] = mini_trees[pruned_roots[i].first]
-                            .extract_bvh(pruned_roots[i].second);
-                }
-            });
-        return pruned_trees;
+        });
+        std::vector<std::pair<size_t, size_t>> pruned_roots;
+        for (auto& roots : per_chunk_roots)
+            pruned_roots.insert(pruned_roots.end(), roots.begin(), roots.end());
+        return pruned_roots;
     }
 
-    Bvh<Node> build_top_bvh(std::vector<Bvh<Node>>& mini_trees) {
-        // Build a BVH using the mini trees as leaves
-        std::vector<Vec> centers(mini_trees.size());
-        std::vector<BBox> bboxes(mini_trees.size());
-        for (size_t i = 0; i < mini_trees.size(); ++i) {
-            bboxes[i] = mini_trees[i].get_root().get_bbox();
-            centers[i] = bboxes[i].get_center();
-        }
+    Bvh<Node> build_top_bvh(
+        std::vector<Bvh<Node>>& mini_trees,
+        const std::vector<std::pair<size_t, size_t>>& roots)
+    {
+        // Build a BVH using the given sub-tree roots as leaves
+        std::vector<Vec> centers(roots.size());
+        std::vector<BBox> bboxes(roots.size());
+        executor_.for_each(0, roots.size(), [&] (size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                bboxes[i] = mini_trees[roots[i].first].nodes[roots[i].second].get_bbox();
+                centers[i] = bboxes[i].get_center();
+            }
+        });
 
         typename SweepSahBuilder<Node>::Config config = config_;
-        config.max_leaf_size = config.min_leaf_size = 1; // Needs to have only one mini-tree in each leaf
-        auto bvh = SweepSahBuilder<Node>::build(bboxes, centers, config);
+        config.max_leaf_size = config.min_leaf_size = 1; // Needs to have only one sub-tree in each leaf
+        auto bvh = roots.size() > config_.top_build_threshold
+            ? SweepSahBuilder<Node>::build_parallel(executor_, bboxes, centers, config,
+                4 * std::max<size_t>(size_t{1}, executor_.thread_pool.get_thread_count()))
+            : SweepSahBuilder<Node>::build(bboxes, centers, config);
 
-        // Compute the offsets to apply to primitive and node indices
-        std::vector<size_t> node_offsets(mini_trees.size());
-        std::vector<size_t> prim_offsets(mini_trees.size());
+        // Count the nodes and primitives of every sub-tree, in parallel
+        std::vector<size_t> node_counts(roots.size());
+        std::vector<size_t> prim_counts(roots.size());
+        executor_.for_each(0, roots.size(), [&] (size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                auto& nodes = mini_trees[roots[i].first].nodes;
+                size_t node_count = 0, prim_count = 0;
+                std::vector<size_t> stack;
+                stack.push_back(roots[i].second);
+                while (!stack.empty()) {
+                    auto node_id = stack.back();
+                    stack.pop_back();
+                    auto& node = nodes[node_id];
+                    ++node_count;
+                    if (node.is_leaf()) {
+                        prim_count += node.index.prim_count();
+                    } else {
+                        stack.push_back(node.index.first_id() + 0);
+                        stack.push_back(node.index.first_id() + 1);
+                    }
+                }
+                node_counts[i] = node_count;
+                prim_counts[i] = prim_count;
+            }
+        });
+
+        // Compute the offsets to apply to node and primitive indices. Sub-tree nodes
+        // are laid out after the top-level nodes, without their root (which is merged
+        // into the leaves of the top-level BVH).
+        std::vector<size_t> node_offsets(roots.size());
+        std::vector<size_t> prim_offsets(roots.size());
         size_t node_count = bvh.nodes.size();
         size_t prim_count = 0;
-        for (size_t i = 0; i < mini_trees.size(); ++i) {
-            node_offsets[i] = node_count - 1; // Skip root node
+        for (size_t i = 0; i < roots.size(); ++i) {
+            node_offsets[i] = node_count;
             prim_offsets[i] = prim_count;
-            node_count += mini_trees[i].nodes.size() - 1; // idem
-            prim_count += mini_trees[i].prim_ids.size();
+            node_count += node_counts[i] - 1; // Skip root node
+            prim_count += prim_counts[i];
         }
 
-        // Helper function to copy and fix the child/primitive index of a node
-        auto copy_node = [&] (size_t i, Node& dst_node, const Node& src_node) {
-            dst_node = src_node;
-            dst_node.index.set_first_id(dst_node.index.first_id() +
-                (src_node.is_leaf() ? prim_offsets[i] : node_offsets[i]));
-        };
+        // Fix the root of every sub-tree so that it can be merged into the leaves of
+        // the top-level BVH, in parallel
+        std::vector<Node> fixed_roots(roots.size());
+        executor_.for_each(0, roots.size(), [&] (size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                auto root = mini_trees[roots[i].first].nodes[roots[i].second];
+                root.index.set_first_id(root.is_leaf() ? prim_offsets[i] : node_offsets[i]);
+                fixed_roots[i] = root;
+            }
+        });
 
-        // Make the leaves of the top BVH point to the right internal nodes
+        // Make the leaves of the top BVH point to the right sub-tree nodes
         for (auto& node : bvh.nodes) {
             if (!node.is_leaf())
                 continue;
             assert(node.index.prim_count() == 1);
             size_t tree_id = bvh.prim_ids[node.index.first_id()];
-            copy_node(tree_id, node, mini_trees[tree_id].get_root());
+            node = fixed_roots[tree_id];
         }
 
+        // Copy the sub-tree nodes and primitives into the final arrays, in parallel
         bvh.nodes.resize(node_count);
         bvh.prim_ids.resize(prim_count);
-        executor_.for_each(0, mini_trees.size(),
-            [&] (size_t begin, size_t end) {
-                for (size_t i = begin; i < end; ++i) {
-                    auto& mini_tree = mini_trees[i];
-
-                    // Copy the nodes of the mini tree with the offsets applied, without copying
-                    // the root node (since it is already copied to the top-level part of the BVH).
-                    for (size_t j = 1; j < mini_tree.nodes.size(); ++j)
-                        copy_node(i, bvh.nodes[node_offsets[i] + j], mini_tree.nodes[j]);
-
-                    std::copy(
-                        mini_tree.prim_ids.begin(),
-                        mini_tree.prim_ids.end(),
-                        bvh.prim_ids.begin() + prim_offsets[i]);
+        executor_.for_each(0, roots.size(), [&] (size_t begin, size_t end) {
+            for (size_t i = begin; i < end; ++i) {
+                auto& src = mini_trees[roots[i].first];
+                auto& src_root = src.nodes[roots[i].second];
+                size_t next_node = node_offsets[i];
+                size_t next_prim = prim_offsets[i];
+                if (src_root.is_leaf()) {
+                    std::copy_n(
+                        src.prim_ids.begin() + src_root.index.first_id(),
+                        src_root.index.prim_count(),
+                        bvh.prim_ids.begin() + next_prim);
+                    continue;
                 }
-            });
+                std::vector<std::pair<size_t, size_t>> stack;
+                stack.emplace_back(src_root.index.first_id() + 0, next_node + 0);
+                stack.emplace_back(src_root.index.first_id() + 1, next_node + 1);
+                next_node += 2;
+                while (!stack.empty()) {
+                    auto [src_id, dst_id] = stack.back();
+                    stack.pop_back();
+                    auto& src_node = src.nodes[src_id];
+                    Node dst_node = src_node;
+                    if (src_node.is_leaf()) {
+                        std::copy_n(
+                            src.prim_ids.begin() + src_node.index.first_id(),
+                            src_node.index.prim_count(),
+                            bvh.prim_ids.begin() + next_prim);
+                        dst_node.index.set_first_id(next_prim);
+                        next_prim += src_node.index.prim_count();
+                    } else {
+                        dst_node.index.set_first_id(next_node);
+                        stack.emplace_back(src_node.index.first_id() + 0, next_node + 0);
+                        stack.emplace_back(src_node.index.first_id() + 1, next_node + 1);
+                        next_node += 2;
+                    }
+                    bvh.nodes[dst_id] = dst_node;
+                }
+            }
+        });
 
         return bvh;
     }
+
 };
 
 } // namespace bvh::v2

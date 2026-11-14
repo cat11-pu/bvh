@@ -37,6 +37,17 @@ public:
         return BinnedSahBuilder(bboxes, centers, config).build();
     }
 
+    /// Builds a BVH over the given set of primitive indices, which may index into a larger
+    /// array of primitives. This avoids copying primitive data when building over a subset.
+    [[nodiscard]] BVH_ALWAYS_INLINE static Bvh<Node> build(
+        std::span<const BBox> bboxes,
+        std::span<const Vec> centers,
+        std::vector<size_t>&& prim_ids,
+        const Config& config = {})
+    {
+        return BinnedSahBuilder(bboxes, centers, std::move(prim_ids), config).build();
+    }
+
 protected:
     struct Split {
         size_t bin_id;
@@ -76,6 +87,15 @@ protected:
     {
         std::iota(prim_ids_.begin(), prim_ids_.end(), 0);
     }
+
+    BVH_ALWAYS_INLINE BinnedSahBuilder(
+        std::span<const BBox> bboxes,
+        std::span<const Vec> centers,
+        std::vector<size_t>&& prim_ids,
+        const Config& config)
+        : TopDownSahBuilder<Node>(bboxes, centers, config)
+        , prim_ids_(std::move(prim_ids))
+    {}
 
     std::vector<size_t>& get_prim_ids() override { return prim_ids_; }
 

@@ -42,3 +42,7 @@ if (BVH_BUILD_C_API)
             --dir 0 0 -1
             --up 0 1 0)
 endif()
+
+add_executable(build_bench build_bench.cpp)
+target_link_libraries(build_bench PUBLIC bvh)
+set_target_properties(build_bench PROPERTIES CXX_STANDARD 20)

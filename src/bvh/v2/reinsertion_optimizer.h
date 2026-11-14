@@ -25,7 +25,7 @@ public:
     };
 
     static void optimize(ThreadPool& thread_pool, Bvh<Node>& bvh, const Config& config = {}) {
-        ParallelExecutor executor(thread_pool);
+        ParallelExecutor executor(thread_pool, 1);
         optimize(executor, bvh, config);
     }
 
@@ -85,7 +85,7 @@ private:
         return parents;
     }
 
-    BVH_ALWAYS_INLINE std::vector<Candidate> find_candidates(size_t target_count) {
+    BVH_ALWAYS_INLINE std::vector<Candidate> find_candidates_serial(size_t target_count) {
         // Gather the `target_count` nodes that have the highest cost.
         // Note that this may produce fewer nodes if the BVH has fewer than `target_count` nodes.
         const auto node_count = std::min(bvh_.nodes.size(), target_count + 1);
@@ -104,7 +104,64 @@ private:
         return candidates;
     }
 
-    Reinsertion find_reinsertion(size_t node_id) {
+    template <typename Derived>
+    BVH_ALWAYS_INLINE std::vector<Candidate> find_candidates(Executor<Derived>& executor, size_t target_count) {
+        const auto node_total = bvh_.nodes.size();
+        if (node_total <= 1)
+            return {};
+        const auto k = std::min(node_total - 1, target_count);
+        if (node_total <= 4096)
+            return find_candidates_serial(target_count);
+
+        // Estimate the area of the k-th most costly node from a uniform sample of the nodes,
+        // with some slack so that the collected set is a superset of the top-k nodes.
+        static constexpr size_t sample_count = 16384;
+        std::vector<Scalar> samples(sample_count);
+        for (size_t i = 0; i < sample_count; ++i)
+            samples[i] = bvh_.nodes[1 + (i * (node_total - 1)) / sample_count].get_bbox().get_half_area();
+        auto rank = std::min(sample_count - 1,
+            static_cast<size_t>((static_cast<double>(k) * 1.25 * sample_count) / node_total));
+        std::nth_element(samples.begin(), samples.begin() + rank, samples.end(), std::greater<>{});
+        const auto threshold = samples[rank];
+
+        // Collect all nodes at or above the threshold, in parallel. Results are
+        // concatenated in chunk order so that they do not depend on the thread schedule.
+        static constexpr size_t chunk_count = 256;
+        const auto node_count = node_total - 1;
+        const size_t chunk_size = (node_count + chunk_count - 1) / chunk_count;
+        const auto used_chunk_count = std::min(chunk_count, node_count);
+        std::vector<std::vector<Candidate>> per_chunk_candidates(used_chunk_count);
+        executor.for_each(size_t{0}, used_chunk_count, [&] (size_t begin, size_t end) {
+            for (size_t c = begin; c < end; ++c) {
+                auto& out = per_chunk_candidates[c];
+                auto first = c * chunk_size, last = std::min(first + chunk_size, node_count);
+                for (size_t i = first; i < last; ++i) {
+                    auto cost = bvh_.nodes[i + 1].get_bbox().get_half_area();
+                    if (cost >= threshold)
+                        out.push_back(Candidate { i + 1, cost });
+                }
+            }
+        });
+        std::vector<Candidate> candidates;
+        candidates.reserve(static_cast<size_t>(k * 1.5));
+        for (auto& chunk_candidates : per_chunk_candidates)
+            candidates.insert(candidates.end(), chunk_candidates.begin(), chunk_candidates.end());
+
+        // Fall back to the exact serial algorithm in the unlikely case that the
+        // sampled threshold was too high to gather enough candidates.
+        if (candidates.size() < k)
+            return find_candidates_serial(target_count);
+
+        // Select the top-k nodes out of the collected superset
+        if (candidates.size() > k) {
+            std::nth_element(candidates.begin(), candidates.begin() + k, candidates.end(),
+                [] (const Candidate& a, const Candidate& b) { return a.cost > b.cost; });
+            candidates.resize(k);
+        }
+        return candidates;
+    }
+
+    Reinsertion find_reinsertion(size_t node_id, std::vector<std::pair<Scalar, size_t>>& stack) {
         assert(node_id != 0);
 
         /*
@@ -145,7 +202,7 @@ private:
         auto parent_id = parents_[node_id];
         auto pivot_id = parent_id;
 
-        std::vector<std::pair<Scalar, size_t>> stack;
+        stack.clear();
         do {
             // Try to find a reinsertion in the sibling at the current level of the tree
             stack.emplace_back(area_diff, sibling_id);
@@ -241,14 +298,15 @@ private:
         std::vector<bool> touched(bvh_.nodes.size());
 
         for (size_t iter = 0; iter < config.max_iter_count; ++iter) {
-            auto candidates = find_candidates(batch_size);
+            auto candidates = find_candidates(executor, batch_size);
 
             std::fill(touched.begin(), touched.end(), false);
             reinsertions.resize(candidates.size());
             executor.for_each(0, candidates.size(),
                 [&] (size_t begin, size_t end) {
+                    std::vector<std::pair<Scalar, size_t>> stack;
                     for (size_t i = begin; i < end; ++i)
-                        reinsertions[i] = find_reinsertion(candidates[i].node_id);
+                        reinsertions[i] = find_reinsertion(candidates[i].node_id, stack);
                 });
 
             reinsertions.erase(std::remove_if(reinsertions.begin(), reinsertions.end(),

@@ -92,14 +92,36 @@ template <typename Node>
 Bvh<Node> Bvh<Node>::extract_bvh(size_t root_id) const {
     assert(root_id != 0);
 
+    // Count the number of nodes and primitives in the subtree, so that the
+    // destination arrays can be allocated exactly once.
+    size_t node_count = 0, prim_count = 0;
+    {
+        std::vector<size_t> stack;
+        stack.push_back(root_id);
+        while (!stack.empty()) {
+            auto src_id = stack.back();
+            stack.pop_back();
+            const auto& src_node = nodes[src_id];
+            ++node_count;
+            if (src_node.is_leaf()) {
+                prim_count += src_node.index.prim_count();
+            } else {
+                stack.push_back(src_node.index.first_id() + 0);
+                stack.push_back(src_node.index.first_id() + 1);
+            }
+        }
+    }
+
     Bvh bvh;
+    bvh.nodes.reserve(node_count);
+    bvh.prim_ids.reserve(prim_count);
     bvh.nodes.emplace_back();
 
-    std::stack<std::pair<size_t, size_t>> stack;
-    stack.emplace(root_id, 0);
+    std::vector<std::pair<size_t, size_t>> stack;
+    stack.emplace_back(root_id, 0);
     while (!stack.empty()) {
-        auto [src_id, dst_id] = stack.top();
-        stack.pop();
+        auto [src_id, dst_id] = stack.back();
+        stack.pop_back();
         const auto& src_node = nodes[src_id];
         auto& dst_node = bvh.nodes[dst_id];
         dst_node = src_node;
@@ -111,8 +133,8 @@ Bvh<Node> Bvh<Node>::extract_bvh(size_t root_id) const {
                 std::back_inserter(bvh.prim_ids));
         } else {
             dst_node.index.set_first_id(bvh.nodes.size());
-            stack.emplace(src_node.index.first_id() + 0, bvh.nodes.size() + 0);
-            stack.emplace(src_node.index.first_id() + 1, bvh.nodes.size() + 1);
+            stack.emplace_back(src_node.index.first_id() + 0, bvh.nodes.size() + 0);
+            stack.emplace_back(src_node.index.first_id() + 1, bvh.nodes.size() + 1);
             // Note: This may invalidate `dst_node` so has to happen after any access to it.
             bvh.nodes.emplace_back();
             bvh.nodes.emplace_back();
