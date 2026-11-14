@@ -17,6 +17,18 @@ target_link_libraries(serialize PUBLIC bvh)
 set_target_properties(serialize PROPERTIES CXX_STANDARD 20)
 add_test(NAME serialize COMMAND serialize)
 
+add_executable(property_test property_test.cpp)
+target_link_libraries(property_test PUBLIC bvh)
+set_target_properties(property_test PROPERTIES CXX_STANDARD 20)
+add_test(
+    NAME property_test
+    COMMAND
+        property_test
+        --groups 10000
+        --scale-runs 2
+        --scale-primitives 100000)
+set_tests_properties(property_test PROPERTIES TIMEOUT 600)
+
 add_executable(benchmark benchmark.cpp load_obj.cpp)
 target_link_libraries(benchmark PUBLIC bvh)
 set_target_properties(benchmark PROPERTIES CXX_STANDARD 20)
